@@ -13,13 +13,12 @@ on:
       - main
 
 jobs:
-  detect-release-type:
-    name: Detect release type from commits
+  determine-version:
+    name: Determine release type
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     outputs:
-      release_type: ${{ steps.detect.outputs.release_type }}
-      should_release: ${{ steps.detect.outputs.should_release }}
+      release_type: ${{ steps.release.outputs.release_type }}
+      should_release: ${{ steps.release.outputs.should_release }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,25 +26,27 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GIT_ACCESS_TOKEN }}
 
-      - name: Detect release type
-        id: detect
+      - name: Determine release type from commits
+        id: release
         run: |
-          # Get commits pushed in this push event
-          COMMITS=$(git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:"%s %b" 2>/dev/null || git log -1 --pretty=format:"%s %b")
+          echo "Checking commit messages..."
+
+          # Get commit messages from current push
+          COMMITS=$(git log ${{ github.event.before }}..${{ github.sha }} --pretty=format:%B)
 
           echo "Commits to analyze:"
           echo "$COMMITS"
 
           RELEASE_TYPE="none"
 
-          # Check for breaking changes first (highest priority)
-          if echo "$COMMITS" | grep -qiE '(\bBREAKING CHANGE\b|^[a-z]+(\([^)]*\))?!:)'; then
+          # Major release detection
+          if echo "$COMMITS" | grep -Eq "BREAKING CHANGE:|^[a-zA-Z]+(\(.+\))?!:"; then
             RELEASE_TYPE="major"
-          # Then check for features
-          elif echo "$COMMITS" | grep -qE '^feat(\([^)]*\))?:'; then
+          # Minor release detection
+          elif echo "$COMMITS" | grep -Eq "^feat(\(.+\))?:"; then
             RELEASE_TYPE="minor"
-          # Then check for fixes
-          elif echo "$COMMITS" | grep -qE '^fix(\([^)]*\))?:'; then
+          # Patch release detection
+          elif echo "$COMMITS" | grep -Eq "^fix(\(.+\))?:"; then
             RELEASE_TYPE="patch"
           fi
 
@@ -61,24 +62,9 @@ jobs:
   release:
     name: Create version release
     runs-on: ubuntu-latest
-    needs: [detect-release-type]
-    if: |
-      always() &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && needs.detect-release-type.outputs.should_release == 'true')
-      ) &&
-      github.ref == 'refs/heads/main'
+    needs: determine-version
+    if: needs.determine-version.outputs.should_release == 'true'
     steps:
-      - name: Resolve release type
-        id: resolve
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "release_type=${{ inputs.release_type }}" >> $GITHUB_OUTPUT
-          else
-            echo "release_type=${{ needs.detect-release-type.outputs.release_type }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -88,7 +74,7 @@ jobs:
       - name: Ensure release is on main
         run: |
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "❌ Release workflow must be run on the main branch"
+            echo "Release workflow must be run on the main branch"
             exit 1
           fi
 
@@ -101,19 +87,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.7.0
-
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "store=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-cache.outputs.store }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -125,8 +99,9 @@ jobs:
 
       - name: Run release script
         run: |
-          echo "🚀 Running release: ${{ steps.resolve.outputs.release_type }}"
-          pnpm release:${{ steps.resolve.outputs.release_type }}
+          RELEASE_TYPE="${{ needs.determine-version.outputs.release_type }}"
+          echo "🚀 Running release: $RELEASE_TYPE"
+          pnpm release:$RELEASE_TYPE
 
       - name: Push changes and tags to main
         run: git push --follow-tags origin main
