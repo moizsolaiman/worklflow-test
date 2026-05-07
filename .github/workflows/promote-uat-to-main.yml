@@ -15,7 +15,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: uat
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GIT_ACCESS_TOKEN }}
 
       # Merge dev into main branch
       - name: Merge fast-forward
@@ -24,4 +24,4 @@ jobs:
           branchtomerge: uat
           branch: main
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GIT_ACCESS_TOKEN }}
