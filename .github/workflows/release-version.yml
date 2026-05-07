@@ -1,0 +1,141 @@
+name: 'Release Version'
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Select release type
+        required: true
+        type: choice
+        options: [patch, minor, major]
+  push:
+    branches:
+      - main
+
+jobs:
+  detect-release-type:
+    name: Detect release type from commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      release_type: ${{ steps.detect.outputs.release_type }}
+      should_release: ${{ steps.detect.outputs.should_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GIT_ACCESS_TOKEN }}
+
+      - name: Detect release type
+        id: detect
+        run: |
+          # Get commits pushed in this push event
+          COMMITS=$(git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:"%s %b" 2>/dev/null || git log -1 --pretty=format:"%s %b")
+
+          echo "Commits to analyze:"
+          echo "$COMMITS"
+
+          RELEASE_TYPE="none"
+
+          # Check for breaking changes first (highest priority)
+          if echo "$COMMITS" | grep -qiE '(\bBREAKING CHANGE\b|^[a-z]+(\([^)]*\))?!:)'; then
+            RELEASE_TYPE="major"
+          # Then check for features
+          elif echo "$COMMITS" | grep -qE '^feat(\([^)]*\))?:'; then
+            RELEASE_TYPE="minor"
+          # Then check for fixes
+          elif echo "$COMMITS" | grep -qE '^fix(\([^)]*\))?:'; then
+            RELEASE_TYPE="patch"
+          fi
+
+          echo "Detected release type: $RELEASE_TYPE"
+          echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+
+          if [ "$RELEASE_TYPE" != "none" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  release:
+    name: Create version release
+    runs-on: ubuntu-latest
+    needs: [detect-release-type]
+    if: |
+      always() &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && needs.detect-release-type.outputs.should_release == 'true')
+      ) &&
+      github.ref == 'refs/heads/main'
+    steps:
+      - name: Resolve release type
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "release_type=${{ inputs.release_type }}" >> $GITHUB_OUTPUT
+          else
+            echo "release_type=${{ needs.detect-release-type.outputs.release_type }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GIT_ACCESS_TOKEN }}
+
+      - name: Ensure release is on main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "❌ Release workflow must be run on the main branch"
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.7.0
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure Git user
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Run release script
+        run: |
+          echo "🚀 Running release: ${{ steps.resolve.outputs.release_type }}"
+          pnpm release:${{ steps.resolve.outputs.release_type }}
+
+      - name: Push changes and tags to main
+        run: git push --follow-tags origin main
+
+      - name: Get version
+        id: get-version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get-version.outputs.version }}
+          name: Release v${{ steps.get-version.outputs.version }}
+          body_path: CHANGELOG.md
+          token: ${{ secrets.GIT_ACCESS_TOKEN }}
+
+      - name: Sync version bumps back to dev
+        run: |
+          git fetch origin
+          git checkout dev
+          git merge origin/main --no-edit
+          git push origin dev
