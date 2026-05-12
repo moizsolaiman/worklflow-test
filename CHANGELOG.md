@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.2.0](https://github.com/moizsolaiman/worklflow-test/compare/v1.1.0...v1.2.0) (2026-05-12)
+
+
+### Features
+
+* test feat ([#22](https://github.com/moizsolaiman/worklflow-test/issues/22)) ([9172940](https://github.com/moizsolaiman/worklflow-test/commit/917294009b6d835493a25c5bcb648d1d1707d968))
+
 ## [1.1.0](https://github.com/moizsolaiman/worklflow-test/compare/v1.0.0...v1.1.0) (2026-05-07)
 
 
